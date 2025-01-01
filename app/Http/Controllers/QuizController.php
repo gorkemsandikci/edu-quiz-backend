@@ -16,26 +16,71 @@ class QuizController extends Controller
         return response()->json($quizzes);
     }
 
-    // Yeni bir quiz oluştur
     public function store(Request $request)
     {
-        $validated = $request->validate([
+        $validatedQuiz = $request->validate([
             'title' => 'required|string|max:255',
             'description' => 'nullable|string',
+            'questions' => 'required|array',
+            'questions.*.question_text' => 'required|string',
+            'questions.*.points' => 'required|integer',
+            'questions.*.question_type' => 'required|string',
+            'questions.*.time_limit' => 'required|integer',
+            'questions.*.order_number' => 'required|integer',
+            'questions.*.answers' => 'required|array',
+            'questions.*.answers.*.answer_text' => 'required|string',
+            'questions.*.answers.*.is_correct' => 'required|boolean',
+            'questions.*.answers.*.explanation' => 'nullable|string',
+
         ]);
 
-        $quiz = Quiz::create($validated);
-        return response()->json($quiz, 201);
+        $quiz = Quiz::create($validatedQuiz);
+
+
+        foreach ($validatedQuiz['questions'] as $validatedQuestion) {
+            $validatedQuestion['quiz_id'] = $quiz->id;
+            $question = Question::create($validatedQuestion);
+
+            foreach ($validatedQuestion['answers'] as $validatedAnswer) {
+                $validatedAnswer['question_id'] = $question->id;
+                Answer::create($validatedAnswer);
+            }
+        }
+
+        return response()->json($quiz, 200);
     }
 
-    // Belirli bir quiz'i görüntüle
     public function show($id)
     {
         $quiz = Quiz::with('questions.answers')->findOrFail($id);
-        return response()->json($quiz);
+
+        $response = [
+            'id' => $quiz->id,
+            'title' => $quiz->title,
+            'description' => $quiz->description,
+            'questions' => $quiz->questions->map(function ($question) {
+                return [
+                    'id' => $question->id,
+                    'question_text' => $question->question_text,
+                    'points' => $question->points,
+                    'question_type' => $question->question_type,
+                    'time_limit' => $question->time_limit,
+                    'order_number' => $question->order_number,
+                    'answers' => $question->answers->map(function ($answer) {
+                        return [
+                            'id' => $answer->id,
+                            'answer_text' => $answer->answer_text,
+                            'is_correct' => $answer->is_correct,
+                            'explanation' => $answer->explanation,
+                        ];
+                    }),
+                ];
+            }),
+        ];
+
+        return response()->json($response);
     }
 
-    // Belirli bir quiz'i güncelle
     public function update(Request $request, $id)
     {
         $quiz = Quiz::findOrFail($id);
@@ -49,7 +94,6 @@ class QuizController extends Controller
         return response()->json($quiz);
     }
 
-    // Belirli bir quiz'i sil
     public function destroy($id)
     {
         $quiz = Quiz::findOrFail($id);
