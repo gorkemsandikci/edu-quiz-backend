@@ -15,10 +15,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('quiz_id');
             $table->string('question_text');
-            $table->integer('points');
             $table->string('question_type');
-            $table->integer('time_limit');
-            $table->integer('order_number');
             $table->timestamps();
         });
     }

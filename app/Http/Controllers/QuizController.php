@@ -6,72 +6,128 @@ use App\Models\Answer;
 use App\Models\Question;
 use App\Models\Quiz;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class QuizController extends Controller
 {
-    // Tüm quiz'leri listele
-    public function index()
+    public function index(Request $request)
     {
-        $quizzes = Quiz::all();
+        $userId = $request->query('userId');
+
+        $quizzes = Quiz::where('creator', $userId)->get()->map(function ($quiz) {
+            return [
+                'id' => $quiz->id,
+                'creator' => $quiz->creator,
+                'title' => $quiz->title,
+                'duration' => $quiz->duration,
+                'liquidity' => $quiz->liquidity,
+                'slug' => $quiz->slug,
+                'winnerCount' => $quiz->winner_count,
+                'description' => $quiz->description,
+            ];
+        });
+        if ($quizzes->isEmpty()) {
+            return response()->json(['status' => 'success', 'message' => 'No quizzes found', 'status_code' => 200], 200);
+        }
+
         return response()->json($quizzes);
     }
 
     public function store(Request $request)
     {
+        try {
         $validatedQuiz = $request->validate([
+            'userId' => 'required|string',
             'title' => 'required|string|max:255',
             'description' => 'nullable|string',
+            'winnerCount' => 'required|integer',
+            'duration' => 'required|integer',
+            'liquidity' => 'nullable|integer',
             'questions' => 'required|array',
-            'questions.*.question_text' => 'required|string',
-            'questions.*.points' => 'required|integer',
-            'questions.*.question_type' => 'required|string',
-            'questions.*.time_limit' => 'required|integer',
-            'questions.*.order_number' => 'required|integer',
+            'questions.*.markdown' => 'required|string',
+            'questions.*.questionType' => 'required|string',
             'questions.*.answers' => 'required|array',
-            'questions.*.answers.*.answer_text' => 'required|string',
-            'questions.*.answers.*.is_correct' => 'required|boolean',
-            'questions.*.answers.*.explanation' => 'nullable|string',
-
+            'questions.*.answers.*.value' => 'required|string',
+            'questions.*.answers.*.isCorrect' => 'required|boolean',
+        ], [
+            'userId.required' => 'User ID is required',
+            'title.required' => 'Title is required',
+            'winnerCount.required' => 'Winner count is required',
+            'duration.required' => 'Duration is required',
+            'questions.required' => 'Questions are required',
+            'questions.*.markdown.required' => 'Question markdown is required',
+            'questions.*.questionType.required' => 'Question type is required',
+            'questions.*.answers.required' => 'Answers are required',
+            'questions.*.answers.*.value.required' => 'Answer value is required',
+            'questions.*.answers.*.isCorrect.required' => 'isCorrect is required',
         ]);
-
-        $quiz = Quiz::create($validatedQuiz);
-
-
-        foreach ($validatedQuiz['questions'] as $validatedQuestion) {
-            $validatedQuestion['quiz_id'] = $quiz->id;
-            $question = Question::create($validatedQuestion);
-
-            foreach ($validatedQuestion['answers'] as $validatedAnswer) {
-                $validatedAnswer['question_id'] = $question->id;
-                Answer::create($validatedAnswer);
-            }
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::error('Validation failed', $e->errors());
+            return response()->json(['errors' => $e->errors()], 422);
         }
 
-        return response()->json($quiz, 200);
+
+
+        $quiz = Quiz::create([
+            'creator' => $validatedQuiz['userId'],
+            'title' => $validatedQuiz['title'],
+            'description' => $validatedQuiz['description'],
+            'winner_count' => $validatedQuiz['winnerCount'],
+            'duration' => $validatedQuiz['duration'],
+            'liquidity' => $validatedQuiz['liquidity'],
+            'slug' => Str::slug($validatedQuiz['title']).'-'.Str::random(4),
+        ]);
+
+        foreach ($validatedQuiz['questions'] as $validatedQuestion) {
+            $question = Question::create([
+                'quiz_id' => $quiz->id,
+                'question_text' => $validatedQuestion['markdown'],
+                'question_type' => $validatedQuestion['questionType'],
+            ]);
+
+            foreach ($validatedQuestion['answers'] as $validatedAnswer) {
+                Answer::create([
+                    'question_id' => $question->id,
+                    'answer_text' => $validatedAnswer['value'],
+                    'is_correct' => $validatedAnswer['isCorrect']
+                ]);
+            }
+        }
+        if ($quiz) {
+        return response()->json(['status' => 'success', 'quiz_id' => $quiz->id], 200);
+        } else {
+            return response()->json(['status' => 'error', 'message' => 'Quiz not created'], 500);
+        }
     }
 
-    public function show($id)
+    public function show(Request $request, $id)
     {
+
+        $userId = $request->query('userId');
+
         $quiz = Quiz::with('questions.answers')->findOrFail($id);
+
+        if ($quiz->creator !== $userId) {
+            return response()->json(['status' => 'error', 'message' => 'Unauthorized'], 403);
+        }
+
 
         $response = [
             'id' => $quiz->id,
             'title' => $quiz->title,
+            'slug' => $quiz->slug,
             'description' => $quiz->description,
             'questions' => $quiz->questions->map(function ($question) {
                 return [
                     'id' => $question->id,
-                    'question_text' => $question->question_text,
-                    'points' => $question->points,
-                    'question_type' => $question->question_type,
-                    'time_limit' => $question->time_limit,
-                    'order_number' => $question->order_number,
+                    'markdown' => $question->question_text,
+                    'questionType' => $question->question_type,
                     'answers' => $question->answers->map(function ($answer) {
                         return [
                             'id' => $answer->id,
-                            'answer_text' => $answer->answer_text,
-                            'is_correct' => $answer->is_correct,
-                            'explanation' => $answer->explanation,
+                            'value' => $answer->answer_text,
+                            'isCorrect' => $answer->is_correct,
                         ];
                     }),
                 ];
@@ -79,64 +135,6 @@ class QuizController extends Controller
         ];
 
         return response()->json($response);
-    }
-
-    public function update(Request $request, $id)
-    {
-        $quiz = Quiz::findOrFail($id);
-
-        $validated = $request->validate([
-            'title' => 'sometimes|required|string|max:255',
-            'description' => 'nullable|string',
-        ]);
-
-        $quiz->update($validated);
-        return response()->json($quiz);
-    }
-
-    public function destroy($id)
-    {
-        $quiz = Quiz::findOrFail($id);
-        $quiz->delete();
-        return response()->json(['message' => 'Quiz deleted successfully']);
-    }
-
-
-    /**
-     * Store a newly created question and its answer in the database.
-     *
-     * @param \Illuminate\Http\Request $request
-     * @return \Illuminate\Http\Response
-     */
-    public function addQuestion(Request $request, string $id)
-    {
-        $validatedQuestion = $request->validate([
-            'question_text' => 'required|string',
-            'points' => 'required|integer',
-            'question_type' => 'required|string',
-            'time_limit' => 'required|integer',
-            'order_number' => 'required|integer',
-        ]);
-
-        $validatedAnswers = $request->validate([
-            'answers' => 'required|array',
-            'answers.*.answer_text' => 'required|string',
-            'answers.*.is_correct' => 'required|boolean',
-            'answers.*.explanation' => 'nullable|string',
-        ]);
-
-
-        $quiz = Quiz::findOrFail($id);
-        $question = new Question($validatedQuestion);
-        $quiz->questions()->save($question);
-
-        foreach ($validatedAnswers['answers'] as $validatedAnswer) {
-            $validatedAnswer['question_id'] = $question->id;
-            $answer = new Answer($validatedAnswer);
-            $question->answers()->save($answer);
-        }
-
-        return response()->json($question, 201);
     }
 
 }
